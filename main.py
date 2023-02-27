@@ -515,7 +515,7 @@ if __name__ == "__main__":
             asyncio.gather(bot.start(settings.DISCORD_BOT_TOKEN), site.start())
         )
     except KeyboardInterrupt:
-        loop.run_until_complete(asyncio.gather(bot.logout(), runner.cleanup()))
+        loop.run_until_complete(asyncio.gather(bot.close(), runner.cleanup()))
         # cancel all tasks lingering
     finally:
         loop.close()
