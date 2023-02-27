@@ -106,7 +106,9 @@ class Regions:
         cached_regions = redis_client.get(self._cache_key)
         if cached_regions is not None:
             cached_regions = json.loads(cached_regions)
-            self.id_to_name = cached_regions["id_to_name"]
+            self.id_to_name = {
+                int(k): v for k, v in cached_regions["id_to_name"].items()
+            }
             self.name_to_id = cached_regions["name_to_id"]
             return
         op = esiapp.op["get_universe_regions"]()
