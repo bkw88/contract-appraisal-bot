@@ -1,13 +1,13 @@
 from setuptools import setup
 
 install_requires = [
-    "aiohttp>=3.8.4",
-    "discord.py==1.3.3",
+    "aiohttp==3.8.4",
+    "discord.py==2.1.1",
     "EsiPy==1.2.2",
     "dynaconf==2.2.3",
     "redis==4.5.1",
     "requests==2.24.0",
-    "dhooks==1.1.3",
+    "dhooks==1.1.4",
     "black==23.1.0",
     "loguru==0.6.0",
     "asgiref==3.2.10",
