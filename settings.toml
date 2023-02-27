@@ -1,7 +1,7 @@
 [default]
 REDIS_URL = "redis://localhost:6379/0"
-BASE_URL = "http://127.0.0.1:8080"
-ESI_CALLBACK ="http://127.0.0.1:8080/callback"
+BASE_URL = "http://127.0.0.1:8082"
+ESI_CALLBACK ="http://127.0.0.1:8082/callback"
 ESI_CLIENT_ID =""
 ESI_SECRET_KEY =""
 ESI_USER_AGENT ="ContractAppraisalBot"

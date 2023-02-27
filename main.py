@@ -5,8 +5,9 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import timedelta, timezone, datetime
+from functools import cached_property
 from itertools import zip_longest
-from typing import Any, Dict, Set, Optional, List, Union
+from typing import Any, Dict, Set, Optional, List, Union, Tuple
 
 import discord
 import redis
@@ -77,6 +78,58 @@ esiclient = EsiClient(
     headers={"User-Agent": settings.ESI_USER_AGENT},
 )
 routes = web.RouteTableDef()
+
+
+class Regions:
+    id_to_name: Dict[int, str]
+    name_to_id: Dict[str, int]
+
+    _cache_key = "region_lookup"
+
+    def __init__(self):
+        self.id_to_name = {}
+        self.name_to_id = {}
+        self.populate_region_ids()
+
+    @cached_property
+    def names(self) -> List[str]:
+        return list(self.name_to_id.keys())
+
+    def search(self, value: str) -> Optional[Tuple[int, str]]:
+        matches = [x for x in self.names if value.upper() in x.upper()]
+        if not matches:
+            return None
+        first_result = matches[0]
+        return self.name_to_id[first_result], first_result
+
+    def populate_region_ids(self):
+        cached_regions = redis_client.get(self._cache_key)
+        if cached_regions is not None:
+            cached_regions = json.loads(cached_regions)
+            self.id_to_name = cached_regions["id_to_name"]
+            self.name_to_id = cached_regions["name_to_id"]
+            return
+        op = esiapp.op["get_universe_regions"]()
+        response = esiclient.request(op)
+        region_ids = [x for x in response.data]
+        op = esiapp.op["post_universe_names"](ids=region_ids)
+        response = esiclient.request(op)
+        for region in response.data:
+            self.id_to_name[region.id] = region.name
+            self.name_to_id[region.name] = region.id
+        redis_client.set(
+            self._cache_key,
+            json.dumps(
+                {
+                    "id_to_name": self.id_to_name,
+                    "name_to_id": self.name_to_id,
+                }
+            ),
+        )
+        pass
+
+
+regions = Regions()
 
 
 @dataclass_json
@@ -150,7 +203,7 @@ async def get_contracts_for_region_id(
         esiapp.op["get_contracts_public_items_contract_id"](contract_id=contract_id)
         for contract_id in contracts_to_load
     ]
-    reqs_and_resps = esiclient.multi_request(ops)
+    reqs_and_resps = esiclient.multi_request(ops, threads=3)
     type_ids = set()
     for req, resp in reqs_and_resps:
         for item in resp.data:
@@ -223,7 +276,8 @@ async def get_prices_for_typeids(type_ids: Set[int]) -> Dict[int, Dict[str, Any]
             logger.warning("No response data")
         else:
             logger.warning(
-                "Response was {response.status}: {response.data}", response=response,
+                "Response was {response.status}: {response.data}",
+                response=response,
             )
     logger.debug("Saving item prices")
     redis_client.set("item_prices", json.dumps(item_prices), ex=settings.CACHE.prices)
@@ -374,22 +428,15 @@ async def top(ctx, region_name: str = "The Forge", min_profit_percent: str = "0.
             "Use `$top {region_name} [{min_profit_percent}]`. min_profit_percent needs to be a decimal number between 0 and 100"
         )
         return
-    loading_msg: Message = await ctx.author.send(
-        "Loading contracts, this may take a couple of minutes..."
-    )
     char_name = esisecurity.verify(options={"verify_aud": False})["name"]
-    region_id = None
+    region_id = 10000002
     if len(region_name) >= 3:
-        response = esiclient.request(
-            esiapp.op["get_search"](
-                categories=["region"], search=region_name, strict=False
-            )
-        )
-        if response.status == 200 and response.data:
-            region_id = getattr(response.data, "region", None)
-            if region_id:
-                region_id = region_id[0]
-    await get_region_name_for_id(region_id)
+        region = regions.search(region_name)
+        if region:
+            region_id, region_name = region
+    loading_msg: Message = await ctx.author.send(
+        f"Loading contracts in {region_name}, this may take a couple of minutes..."
+    )
     profits = await filter_contracts(region_id, min_profit_percent)
     await ctx.author.send(f"Logged in as {char_name}")
     embed_dict = await generate_embed(
@@ -397,17 +444,6 @@ async def top(ctx, region_name: str = "The Forge", min_profit_percent: str = "0.
     )
     await loading_msg.delete()
     await ctx.author.send(content="", embed=discord.Embed.from_dict(embed_dict))
-
-
-async def get_region_name_for_id(region_id: int) -> Optional[str]:
-    if region_id is None:
-        return
-    response = esiclient.request(
-        esiapp.op["get_universe_regions_region_id"](region_id=region_id)
-    )
-    if response.status == 200 and response.data:
-        return getattr(response.data, "name", None)
-    return
 
 
 async def filter_contracts(region_id: int, min_profit_percent: decimal.Decimal):
@@ -427,7 +463,7 @@ async def filter_contracts(region_id: int, min_profit_percent: decimal.Decimal):
 async def generate_embed(
     user_id, profits, region_id, min_profit_percent: decimal.Decimal, offset: int = 0
 ):
-    region_name = await get_region_name_for_id(region_id)
+    region_name = regions.id_to_name[region_id]
     total_contracts = len(profits)
     max_on_page = min([offset + settings.PER_PAGE, total_contracts])
     embed = Embed(
@@ -438,7 +474,9 @@ async def generate_embed(
         color=0x03FC73,
         timestamp="now",
     )
-    embed.set_author(name="Contract Appraisal Bot",)
+    embed.set_author(
+        name="Contract Appraisal Bot",
+    )
     for contract_id, contract in {
         k: profits[k] for k in list(profits)[offset:max_on_page]
     }.items():
@@ -450,7 +488,8 @@ async def generate_embed(
             f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={user_id})"
         )
         embed.add_field(
-            name=name, value=value,
+            name=name,
+            value=value,
         )
     if max_on_page < total_contracts:
         embed.add_field(
