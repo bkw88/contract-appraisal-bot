@@ -402,7 +402,7 @@ async def next_page(request: BaseRequest):
         offset=offset,
         min_profit_percent=min_profit_percent,
     )
-    user: User = bot.get_user(user_id)
+    user: User = await bot.fetch_user(user_id)
     await user.send(content="", embed=discord.Embed.from_dict(embed_dict))
     return web.Response(
         text="You'll receive a message on discord, please close this window."
